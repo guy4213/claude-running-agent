@@ -2,14 +2,16 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
-const axios = require('axios'); // <--- תוסיף את זה!
-// הגדרות נתיבים - מותאם לווינדוס
+const axios = require('axios'); // חובה להתקין: npm install axios
+
+// הגדרות טלגרם - תחליף בפרטים שלך
+const TELEGRAM_TOKEN = '8651652432:AAFfuiITIdBHXrSgO9ubASezP5Ms6S1jqxw';
+const TELEGRAM_CHAT_ID = '5657105510';
+
+// הגדרות נתיבים
 const TASKS_DIR = path.join(__dirname, 'tasks');
 const COMPLETED_DIR = path.join(TASKS_DIR, 'completed');
 const MAX_TASKS_PER_RUN = 2;
-// לוג בדיקה ראשוני - חייב להופיע בטרמינל מיד!
-console.log('--- SCRIPT STARTING ---');
-
 async function sendTelegram(message) {
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
