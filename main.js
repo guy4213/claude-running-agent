@@ -48,8 +48,7 @@ function executeTasksBatch() {
 
         // הרצת קלוד קוד בטרמינל
         const claudePrompt = `"Read tasks/${taskFile}. Implement the requirements in the codebase. Do not ask for any user input or confirmation. When you are done, just exit."`;
-        const isSuccess = runCommand(`claude -p ${claudePrompt}`);
-
+        const isSuccess = runCommand(`npx claude -p ${claudePrompt} --dangerously-skip-permissions`);
         if (isSuccess) {
             const status = execSync('git status --porcelain', { encoding: 'utf-8' });
             if (status.trim().length > 0) {
