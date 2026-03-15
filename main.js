@@ -7,6 +7,9 @@ const cron = require('node-cron');
 const TASKS_DIR = path.join(__dirname, 'tasks');
 const COMPLETED_DIR = path.join(TASKS_DIR, 'completed');
 const MAX_TASKS_PER_RUN = 2;
+// לוג בדיקה ראשוני - חייב להופיע בטרמינל מיד!
+console.log('--- SCRIPT STARTING ---');
+
 async function sendTelegram(message) {
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -25,63 +28,67 @@ function runCommand(command) {
         execSync(command, { stdio: 'inherit', encoding: 'utf-8' });
         return true;
     } catch (error) {
-        console.error(`\n[❌ Failed]: ${command}`);
+        console.error(`\n[❌ Failed]: ${error.message}`);
         return false;
     }
 }
 
 async function executeTasksBatch() {
-    let finalReport = `🤖 *דיווח בוקר מפורט - סוכן קלוד*\n\n`;
+    console.log('\n[!] Scanning for tasks...');
     
     if (!fs.existsSync(COMPLETED_DIR)) fs.mkdirSync(COMPLETED_DIR, { recursive: true });
+    if (!fs.existsSync(TASKS_DIR)) fs.mkdirSync(TASKS_DIR, { recursive: true });
 
-    const allFiles = fs.existsSync(TASKS_DIR) ? fs.readdirSync(TASKS_DIR) : [];
+    const allFiles = fs.readdirSync(TASKS_DIR);
     const pendingTasks = allFiles.filter(file => file.endsWith('.md') && !fs.statSync(path.join(TASKS_DIR, file)).isDirectory());
 
-    if (pendingTasks.length === 0) return;
+    if (pendingTasks.length === 0) {
+        console.log('😴 No tasks found in /tasks folder.');
+        return;
+    }
+
+    console.log(`✅ Found ${pendingTasks.length} tasks! Starting...`);
 
     runCommand('git checkout main');
-    runCommand('git pull origin main');
+    
+    let finalReport = `🤖 *דיווח בוקר מפורט - סוכן קלוד*\n\n`;
 
-    for (const taskFile of pendingTasks.slice(0, MAX_TASKS_PER_RUN)) {
-        const timestamp = Date.now();
-        const branchName = `feature/auto-${taskFile.replace('.md', '')}-${timestamp}`;
-        
+    for (const taskFile of pendingTasks.slice(0, 2)) {
+        const branchName = `feature/auto-${Date.now()}`;
         runCommand(`git checkout -b ${branchName}`);
 
-        // כאן השדרוג: ביקשתי מקלוד ליצור קובץ summary.txt עם הסבר על מה הוא עשה
-        const claudePrompt = `"Read tasks/${taskFile}. Implement the requirements. After finishing, create a file named 'summary.txt' with a 2-sentence summary of your changes in HEBREW. Do not ask questions. Exit when done."`;
-        
-        const success = runCommand(`npx claude -p ${claudePrompt} --dangerously-skip-permissions`);
+        const prompt = `"Read tasks/${taskFile}. Implement it. Create 'summary.txt' with 1 sentence in Hebrew about what you did. Exit."`;
+        const success = runCommand(`npx claude -p ${prompt} --dangerously-skip-permissions`);
 
         if (success) {
-            const status = execSync('git status --porcelain', { encoding: 'utf-8' });
-            if (status.trim().length > 0) {
-                // קריאת הסיכום שקלוד כתב
-                let taskSummary = "לא סופק סיכום.";
-                if (fs.existsSync('summary.txt')) {
-                    taskSummary = fs.readFileSync('summary.txt', 'utf-8');
-                    fs.unlinkSync('summary.txt'); // מחיקת הקובץ הזמני
-                }
-
-                runCommand('git add .');
-                runCommand(`git commit -m "Auto-commit: ${taskFile}"`);
-                runCommand(`git push -u origin ${branchName}`);
-
-                const oldPath = path.join(TASKS_DIR, taskFile);
-                const newPath = path.join(COMPLETED_DIR, taskFile);
-                fs.renameSync(oldPath, newPath);
-
-                finalReport += `📄 *משימה:* ${taskFile}\n`;
-                finalReport += `💡 *מה בוצע:* ${taskSummary}\n`;
-                finalReport += `🔗 *בראנץ':* \`${branchName}\`\n\n`;
+            let summary = "בוצעו שינויים בקוד.";
+            if (fs.existsSync('summary.txt')) {
+                summary = fs.readFileSync('summary.txt', 'utf-8');
+                fs.unlinkSync('summary.txt');
             }
+            
+            runCommand('git add .');
+            runCommand(`git commit -m "Auto: ${taskFile}"`);
+            runCommand(`git push -u origin ${branchName}`);
+            
+            fs.renameSync(path.join(TASKS_DIR, taskFile), path.join(COMPLETED_DIR, taskFile));
+            finalReport += `📄 *משימה:* ${taskFile}\n💡 *סיכום:* ${summary}\n\n`;
         }
         runCommand('git checkout main');
     }
-
+    
     await sendTelegram(finalReport);
+    console.log('🏁 Batch finished.');
 }
 
-cron.schedule('0 8 * * *', () => executeTasksBatch());
-executeTasksBatch(); // הרצה לבדיקה
+// תזמון
+cron.schedule('0 8 * * *', () => {
+    executeTasksBatch();
+});
+
+// הודעת הפעלה
+console.log('🤖 Claude Automation is UP and RUNNING!');
+console.log('🕒 Cron scheduled for 08:00');
+
+// הרצה מיידית
+executeTasksBatch().catch(err => console.error('CRITICAL ERROR:', err));
