@@ -191,3 +191,4 @@ console.log('🕒 Cron scheduled for 08:00');
 console.log('📂 Projects:', Object.keys(PROJECTS).join(', '));
 
 executeTasksBatch().catch(err => console.error('CRITICAL ERROR:', err));
+//
