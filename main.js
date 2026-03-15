@@ -2,7 +2,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
-
+const axios = require('axios'); // <--- תוסיף את זה!
 // הגדרות נתיבים - מותאם לווינדוס
 const TASKS_DIR = path.join(__dirname, 'tasks');
 const COMPLETED_DIR = path.join(TASKS_DIR, 'completed');
