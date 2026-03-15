@@ -7,14 +7,21 @@ const cron = require('node-cron');
 const TASKS_DIR = path.join(__dirname, 'tasks');
 const COMPLETED_DIR = path.join(TASKS_DIR, 'completed');
 const MAX_TASKS_PER_RUN = 2;
+async function sendTelegram(message) {
+    try {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            chat_id: TELEGRAM_CHAT_ID,
+            text: message,
+            parse_mode: 'Markdown'
+        });
+    } catch (e) {
+        console.error('❌ Telegram failed:', e.message);
+    }
+}
 
-/**
- * פונקציית עזר להרצת פקודות טרמינל עם לוגים מסודרים
- */
 function runCommand(command) {
     try {
         console.log(`\n[🏃 Running]: ${command}`);
-        // נשתמש ב-stdio: 'inherit' כדי לראות את הפלט של קלוד וגיט בלייב
         execSync(command, { stdio: 'inherit', encoding: 'utf-8' });
         return true;
     } catch (error) {
@@ -23,101 +30,58 @@ function runCommand(command) {
     }
 }
 
-/**
- * פונקציית הליבה של האוטומציה
- */
-function executeTasksBatch() {
-    console.log('\n==========================================');
-    console.log('🤖 Starting Claude Automation Batch');
-    console.log(`⏰ Time: ${new Date().toLocaleString()}`);
-    console.log('==========================================');
+async function executeTasksBatch() {
+    let finalReport = `🤖 *דיווח בוקר מפורט - סוכן קלוד*\n\n`;
+    
+    if (!fs.existsSync(COMPLETED_DIR)) fs.mkdirSync(COMPLETED_DIR, { recursive: true });
 
-    // יצירת תיקיית completed אם היא לא קיימת
-    if (!fs.existsSync(COMPLETED_DIR)) {
-        fs.mkdirSync(COMPLETED_DIR, { recursive: true });
-    }
-
-    // סריקת משימות פתוחות (רק קבצי Markdown בתיקייה הראשית של tasks)
     const allFiles = fs.existsSync(TASKS_DIR) ? fs.readdirSync(TASKS_DIR) : [];
-    const pendingTasks = allFiles.filter(file => 
-        file.endsWith('.md') && 
-        !fs.statSync(path.join(TASKS_DIR, file)).isDirectory()
-    );
+    const pendingTasks = allFiles.filter(file => file.endsWith('.md') && !fs.statSync(path.join(TASKS_DIR, file)).isDirectory());
 
-    if (pendingTasks.length === 0) {
-        console.log('📭 No pending tasks found. System idle.');
-        return;
-    }
+    if (pendingTasks.length === 0) return;
 
-    // הגבלת כמות המשימות לריצה אחת (למשל 2)
-    const tasksToProcess = pendingTasks.slice(0, MAX_TASKS_PER_RUN);
-    console.log(`📝 Found ${pendingTasks.length} tasks. Processing the next ${tasksToProcess.length}...`);
-
-    // יישור קו מול השרת לפני תחילת עבודה
     runCommand('git checkout main');
     runCommand('git pull origin main');
 
-    for (const taskFile of tasksToProcess) {
-        console.log(`\n------------------------------------------`);
-        console.log(`🚀 PROCESSING TASK: ${taskFile}`);
-        
-        // יצירת שם בראנץ' ייחודי עם חותמת זמן למניעת התנגשויות
+    for (const taskFile of pendingTasks.slice(0, MAX_TASKS_PER_RUN)) {
         const timestamp = Date.now();
         const branchName = `feature/auto-${taskFile.replace('.md', '')}-${timestamp}`;
+        
+        runCommand(`git checkout -b ${branchName}`);
 
-        // יצירת הענף החדש
-        const checkoutSuccess = runCommand(`git checkout -b ${branchName}`);
-        if (!checkoutSuccess) continue;
+        // כאן השדרוג: ביקשתי מקלוד ליצור קובץ summary.txt עם הסבר על מה הוא עשה
+        const claudePrompt = `"Read tasks/${taskFile}. Implement the requirements. After finishing, create a file named 'summary.txt' with a 2-sentence summary of your changes in HEBREW. Do not ask questions. Exit when done."`;
+        
+        const success = runCommand(`npx claude -p ${claudePrompt} --dangerously-skip-permissions`);
 
-        // הפעלת קלוד - עם npx לעקיפת בעיות PATH ודגל הרשאות אוטומטי
-        const claudePrompt = `"Read tasks/${taskFile}. Implement the requirements in the codebase. Do not ask for any user input or confirmation. When you are done, just exit."`;
-        const isClaudeSuccess = runCommand(`npx claude -p ${claudePrompt} --dangerously-skip-permissions`);
-
-        if (isClaudeSuccess) {
-            // בדיקה אם נוצרו שינויים פיזיים בקוד
+        if (success) {
             const status = execSync('git status --porcelain', { encoding: 'utf-8' });
-            
             if (status.trim().length > 0) {
-                console.log('\n✨ Changes detected! Committing and pushing...');
+                // קריאת הסיכום שקלוד כתב
+                let taskSummary = "לא סופק סיכום.";
+                if (fs.existsSync('summary.txt')) {
+                    taskSummary = fs.readFileSync('summary.txt', 'utf-8');
+                    fs.unlinkSync('summary.txt'); // מחיקת הקובץ הזמני
+                }
+
                 runCommand('git add .');
-                runCommand(`git commit -m "Auto-commit: Implemented ${taskFile} via Claude"`);
+                runCommand(`git commit -m "Auto-commit: ${taskFile}"`);
                 runCommand(`git push -u origin ${branchName}`);
-                
-                // העברת המשימה ל-completed מיד לאחר הפוש (לפני החלפת בראנץ')
+
                 const oldPath = path.join(TASKS_DIR, taskFile);
                 const newPath = path.join(COMPLETED_DIR, taskFile);
-                
-                if (fs.existsSync(oldPath)) {
-                    fs.renameSync(oldPath, newPath);
-                    console.log(`\n✅ Task ${taskFile} archived to completed/`);
-                }
-                
-                console.log(`\n🎉 Success! Pull Request ready for: ${branchName}`);
-            } else {
-                console.log(`\n⚠️ Claude finished, but no files were modified for ${taskFile}.`);
-            }
-        } else {
-            console.log(`\n❌ Claude failed to complete the task: ${taskFile}`);
-        }
+                fs.renameSync(oldPath, newPath);
 
-        // חזרה ל-main לקראת המשימה הבאה
+                finalReport += `📄 *משימה:* ${taskFile}\n`;
+                finalReport += `💡 *מה בוצע:* ${taskSummary}\n`;
+                finalReport += `🔗 *בראנץ':* \`${branchName}\`\n\n`;
+            }
+        }
         runCommand('git checkout main');
     }
 
-    console.log('\n==========================================');
-    console.log('🏁 Batch execution finished. Waiting for next cron...');
-    console.log('==========================================\n');
+    await sendTelegram(finalReport);
 }
 
-// --- הגדרת תזמון (Cron) ---
-// רץ בכל יום ב-08:00 בבוקר
-cron.schedule('0 8 * * *', () => {
-    executeTasksBatch();
-});
-
-console.log('🤖 Claude Automation Manager is active.');
-console.log('📅 Schedule: Every day at 08:00 AM.');
-console.log('💡 Note: You can also run it immediately for testing.');
-
-// --- הרצה ראשונית לבדיקה (אופציונלי - אפשר למחוק אם רוצים רק קרון) ---
-executeTasksBatch();
+cron.schedule('0 8 * * *', () => executeTasksBatch());
+executeTasksBatch(); // הרצה לבדיקה
