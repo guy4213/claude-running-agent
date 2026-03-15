@@ -41,9 +41,10 @@ function executeTasksBatch() {
     runCommand('git pull origin main');
 
     for (const taskFile of tasksToProcess) {
+        const timestamp = Date.now();
         console.log(`\n>>> Executing Task: ${taskFile} <<<`);
-        const branchName = `feature/auto-${taskFile.replace('.md', '')}`;
-
+        const branchName = `feature/auto-${taskFile.replace('.md', '')}-${timestamp}`;
+        console.log(`\n[🏃 Running]: Creating fresh branch: ${branchName}`);
         runCommand(`git checkout -b ${branchName}`);
 
         // הרצת קלוד קוד בטרמינל
