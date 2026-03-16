@@ -49,10 +49,11 @@ async function refreshClaudeToken() {
   console.log('\n[🔑] Refreshing Claude token...');
   const result = runCommand('npx claude --version', __dirname);
   if (result) {
-    console.log('✅ Claude token refreshed successfully');
+    // וודא שה-credentials מועתקים נכון ל-HOME
+    runCommand(`cp /etc/secrets/credentials.json $HOME/.claude/.credentials.json`, __dirname);
+    console.log('✅ Claude token ready');
   } else {
-    console.error('❌ Failed to refresh Claude token');
-    await sendTelegram('⚠️ *שגיאה:* Claude token פג תוקף — נדרש עדכון ידני של credentials ב-Render');
+    await sendTelegram('⚠️ *שגיאה:* Claude token פג תוקף');
   }
   return result;
 }
