@@ -158,13 +158,16 @@ async function executeTasksBatch() {
         repoDir
       );
 
-      if (pushed) {
-        // 9. סמן משימה כהושלמה ב-repo של הסוכן
+        if (pushed) {
         fs.renameSync(
           path.join(TASKS_DIR, taskFile),
           path.join(COMPLETED_DIR, taskFile)
         );
+
         runCommand('git checkout main', __dirname);
+        runCommand('git config user.email "claude-bot@automation.local"', __dirname);
+        runCommand('git config user.name "Claude Agent"', __dirname);
+        runCommand('git pull origin main', __dirname);
         runCommand('git add .', __dirname);
         runCommand(`git commit -m "Done: ${taskFile}"`, __dirname);
         runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
