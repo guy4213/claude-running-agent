@@ -220,9 +220,6 @@ async function executeTasksBatch() {
 
   console.log(`✅ Found ${pendingTasks.length} tasks! (${failedTasks.length} retries, ${newTasks.length} new)`);
   let finalReport = `🤖 *דיווח סוכן קלוד*\n\n`;
-
-  finalReport += `🔄 *איטרציות:* ${iterationCount}/${MAX_REVIEW_ITERATIONS}\n`;
-
   for (const task of pendingTasks.slice(0, 2)) {
     const { file: taskFile, dir: taskDir, isRetry } = task;
     const project = getProjectFromFilename(taskFile);
