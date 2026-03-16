@@ -42,6 +42,20 @@ const MAX_REVIEW_ITERATIONS = 2;
 
 // ================================================
 
+// ================================================
+// 🔑 TOKEN REFRESH
+// ================================================
+async function refreshClaudeToken() {
+  console.log('\n[🔑] Refreshing Claude token...');
+  const result = runCommand('npx claude --version', __dirname);
+  if (result) {
+    console.log('✅ Claude token refreshed successfully');
+  } else {
+    console.error('❌ Failed to refresh Claude token');
+    await sendTelegram('⚠️ *שגיאה:* Claude token פג תוקף — נדרש עדכון ידני של credentials ב-Render');
+  }
+  return result;
+}
 async function sendTelegram(message) {
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -185,6 +199,8 @@ ${iteration < MAX_REVIEW_ITERATIONS ? `
 // 🚀 MAIN TASK RUNNER
 // ================================================
 async function executeTasksBatch() {
+    await refreshClaudeToken();
+
   // Setup git identity
   runCommand('git config --global user.email "claude-bot@automation.local"', __dirname);
   runCommand('git config --global user.name "Claude Agent"', __dirname);
