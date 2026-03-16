@@ -259,14 +259,15 @@ ${iteration < MAX_REVIEW_ITERATIONS ? `
    - Exit.
 `}
 
-CRITICAL OUTPUT RULE:
-The first line of tasks/review/review-result.md MUST be exactly one of:
-  ## Status: ✅ PASSED
-  ## Status: 🔧 FIXED
-  ## Status: ❌ FAILED
+CRITICAL: Write tasks/review/review-result.md starting with EXACTLY this line (copy-paste, no changes):
+## Status: ✅ PASSED
+or
+## Status: 🔧 FIXED
+or  
+## Status: ❌ FAILED
 
-Do NOT use any other wording — no "APPROVED", "LGTM", "looks good", or any variation.
-This exact format is required for the automation pipeline to work correctly.
+The line must start with "## Status:" — not "Result:", not "Verdict:", not "PASS", not "APPROVED".
+If the file does not start with "## Status:" the pipeline will break.
 `.trim();
 
   const success = runCommand(
@@ -421,7 +422,9 @@ for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
 
     // Push branch
     const pushed = runCommand(`git push ${getAuthUrl(repoUrl)} ${branchName}`, repoDir);
-
+      if (!reviewStatus) {
+        reviewStatus = '⚠️ סטטוס לא זוהה — בדוק לוגים';
+      }
     if (pushed) {
       const isSuccess = reviewStatus.includes('✅') || reviewStatus.includes('🔧');
       const destDir = isSuccess ? COMPLETED_DIR : FAILED_DIR;
