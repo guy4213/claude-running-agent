@@ -150,6 +150,7 @@ async function executeTasksBatch() {
       fs.unlinkSync(path.join(repoTasksDir, taskFile));
 
       // 8. Commit + push עם GitHub token
+      
       runCommand('git add .', repoDir);
       runCommand(`git commit -m "Auto: ${taskFile}"`, repoDir);
       const pushed = runCommand(
@@ -163,6 +164,7 @@ async function executeTasksBatch() {
           path.join(TASKS_DIR, taskFile),
           path.join(COMPLETED_DIR, taskFile)
         );
+        runCommand('git checkout main', __dirname);
         runCommand('git add .', __dirname);
         runCommand(`git commit -m "Done: ${taskFile}"`, __dirname);
         runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
