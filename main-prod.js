@@ -69,8 +69,9 @@ function getProjectFromFilename(filename) {
 }
 
 async function pullLatestTasks() {
-  // שואב משימות חדשות שהוספת ל-tasks/ ב-GitHub
   console.log('\n[🔄] Pulling latest tasks from GitHub...');
+  // הגדר origin עם token לפני pull
+  runCommand(`git remote set-url origin ${getAuthUrl(AGENT_REPO)}`, __dirname);
   runCommand('git pull origin main', __dirname);
 }
 
