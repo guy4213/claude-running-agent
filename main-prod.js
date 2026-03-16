@@ -189,7 +189,8 @@ ${iteration < MAX_REVIEW_ITERATIONS ? `
     fs.unlinkSync(resultPath);
   }
 
-  const passed = resultContent.includes('✅ PASSED');
+const passed = resultContent.includes('✅ PASSED') || 
+               resultContent.includes('APPROVED');
   const fixed = resultContent.includes('🔧 FIXED');
   const failed = resultContent.includes('❌ FAILED');
 
@@ -358,8 +359,10 @@ for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
       runCommand('git checkout main', __dirname);
       runCommand('git pull origin main', __dirname);
       runCommand('git add .', __dirname);
-      runCommand(`git commit -m "${isSuccess ? 'Done' : 'Failed'}: ${taskFile}${isRetry ? ' (retry)' : ''}"`, __dirname);
+      const committed = runCommand(`git commit -m "${isSuccess ? 'Done' : 'Failed'}: ${taskFile}${isRetry ? ' (retry)' : ''}"`, __dirname);
+      if (committed) {
       runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
+       }
 
      
     } else {
@@ -370,8 +373,10 @@ for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
     fs.rmSync(repoDir, { recursive: true, force: true });
   }
     finalReport += '\n';
-
-  await sendTelegram(finalReport);
+if (finalReport.length > 4000) {
+  finalReport = finalReport.substring(0, 3900) + '\n\n...✂️ נחתך';
+}
+await sendTelegram(finalReport);
   console.log('🏁 Batch finished.');
 }
 
