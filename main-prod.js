@@ -68,7 +68,91 @@ async function sendTelegram(message) {
     console.error('❌ Telegram failed:', e.message);
   }
 }
+// ================================================
+// 🔄 TELEGRAM REFRESH COMMAND
+// ================================================
+let waitingForCredentials = false;
 
+async function handleTelegramUpdates() {
+  let offset = 0;
+
+  setInterval(async () => {
+    try {
+      const res = await axios.get(
+        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${offset}&timeout=5`
+      );
+
+      for (const update of res.data.result) {
+        offset = update.update_id + 1;
+        const msg = update.message;
+        if (!msg) continue;
+
+        const text = msg.text || '';
+        const chatId = msg.chat.id.toString();
+
+        // רק מה-chat שלך
+        if (chatId !== TELEGRAM_CHAT_ID) continue;
+
+        if (text === '/refresh') {
+          waitingForCredentials = true;
+          await sendTelegram(
+            '🔑 *רענון טוקן*\n\nשלח את תוכן הקובץ `.credentials.json` שלך:'
+          );
+
+        } else if (waitingForCredentials && text.startsWith('{')) {
+          waitingForCredentials = false;
+
+          try {
+            // וודא שזה JSON תקין
+            const creds = JSON.parse(text);
+            if (!creds.claudeAiOauth?.accessToken) throw new Error('Invalid format');
+
+            // עדכן את ה-Secret File ב-Render
+            await updateRenderSecret(text);
+            await sendTelegram('✅ *טוקן עודכן בהצלחה!*\nהשירות יעלה מחדש תוך כדקה.');
+
+          } catch (e) {
+            await sendTelegram(`❌ *שגיאה:* ${e.message}\nוודא שהפורמט נכון.`);
+          }
+        }
+      }
+    } catch (e) {
+      // שקט בשגיאות polling
+    }
+  }, 3000);
+}
+
+async function updateRenderSecret(newCredentials) {
+  const RENDER_API_KEY = process.env.RENDER_API_KEY;
+  const RENDER_SERVICE_ID = process.env.RENDER_SERVICE_ID;
+
+  if (!RENDER_API_KEY || !RENDER_SERVICE_ID) {
+    throw new Error('RENDER_API_KEY או RENDER_SERVICE_ID חסרים');
+  }
+
+  // שלב 1 — מצא את ה-secret file הקיים
+  const filesRes = await axios.get(
+    `https://api.render.com/v1/services/${RENDER_SERVICE_ID}/secret-files`,
+    { headers: { Authorization: `Bearer ${RENDER_API_KEY}` } }
+  );
+
+  const secretFile = filesRes.data.find(f => f.name === 'credentials.json');
+  if (!secretFile) throw new Error('credentials.json לא נמצא ב-Render');
+
+  // שלב 2 — עדכן את התוכן
+  await axios.put(
+    `https://api.render.com/v1/services/${RENDER_SERVICE_ID}/secret-files/${secretFile.id}`,
+    { content: newCredentials },
+    { headers: { Authorization: `Bearer ${RENDER_API_KEY}` } }
+  );
+
+  // שלב 3 — Redeploy
+  await axios.post(
+    `https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys`,
+    {},
+    { headers: { Authorization: `Bearer ${RENDER_API_KEY}` } }
+  );
+}
 function runCommand(command, cwd) {
   try {
     console.log(`\n[🏃 ${cwd ? path.basename(cwd) : ''}]: ${command}`);
@@ -174,6 +258,15 @@ ${iteration < MAX_REVIEW_ITERATIONS ? `
      ## Issues: [list every unresolved issue]
    - Exit.
 `}
+
+CRITICAL OUTPUT RULE:
+The first line of tasks/review/review-result.md MUST be exactly one of:
+  ## Status: ✅ PASSED
+  ## Status: 🔧 FIXED
+  ## Status: ❌ FAILED
+
+Do NOT use any other wording — no "APPROVED", "LGTM", "looks good", or any variation.
+This exact format is required for the automation pipeline to work correctly.
 `.trim();
 
   const success = runCommand(
@@ -189,8 +282,7 @@ ${iteration < MAX_REVIEW_ITERATIONS ? `
     fs.unlinkSync(resultPath);
   }
 
-const passed = resultContent.includes('✅ PASSED') || 
-               resultContent.includes('APPROVED');
+  const passed = resultContent.includes('✅ PASSED');
   const fixed = resultContent.includes('🔧 FIXED');
   const failed = resultContent.includes('❌ FAILED');
 
@@ -390,3 +482,4 @@ console.log('🕒 Cron: 08:00 daily');
 console.log('📂 Projects:', Object.keys(PROJECTS).join(', '));
 
 executeTasksBatch().catch(err => console.error('CRITICAL ERROR:', err));
+handleTelegramUpdates();
