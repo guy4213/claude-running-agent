@@ -1,0 +1,12 @@
+{
+  "name": "claude-running-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "mkdir -p /root/.claude && cp /etc/secrets/credentials.json /root/.claude/.credentials.json && node main.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
