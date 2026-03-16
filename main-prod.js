@@ -126,26 +126,39 @@ Follow these steps exactly:
 1. Read CONTEXT.md in the project root if it exists.
 2. Read tasks/${taskFile} — focus on the "Review Criteria" section.
 3. Read ${reviewFile} — understand what the developer implemented and what files changed.
-4. Review the changed files carefully against the criteria.
+4. Review the changed files carefully against every criterion.
+
+${iteration < MAX_REVIEW_ITERATIONS ? `
 5. If everything passes:
    - Delete the file "${reviewFile}"
    - Write tasks/review/review-result.md with:
      ## Status: ✅ PASSED
      ## Notes: [what you verified]
    - Exit.
-6. If there are issues (max ${MAX_REVIEW_ITERATIONS} iterations total):
-   - Fix the issues directly in the code.
-   - Update ${reviewFile} to reflect the fixes.
+
+6. If there are issues:
+   - Fix ALL issues directly in the code. Do not skip any.
+   - Update ${reviewFile} to describe what you fixed.
    - Write tasks/review/review-result.md with:
      ## Status: 🔧 FIXED
-     ## Issues found: [list issues]
-     ## Fixes applied: [list fixes]
+     ## Issues found: [list every issue]
+     ## Fixes applied: [list every fix]
    - Exit.
-7. If this is iteration ${MAX_REVIEW_ITERATIONS} and issues remain:
+` : `
+5. If everything passes:
+   - Delete the file "${reviewFile}"
+   - Write tasks/review/review-result.md with:
+     ## Status: ✅ PASSED
+     ## Notes: [what you verified]
+   - Exit.
+
+6. If ANY issues remain — even minor ones:
+   - Do NOT attempt to fix. This is the final iteration.
    - Write tasks/review/review-result.md with:
      ## Status: ❌ FAILED
-     ## Issues: [list unresolved issues]
+     ## Issues: [list every unresolved issue]
    - Exit.
+`}
 `.trim();
 
   const success = runCommand(
@@ -183,24 +196,35 @@ async function executeTasksBatch() {
 
   console.log('\n[!] Scanning for tasks...');
 
-  ['completed', 'failed'].forEach(dir => {
+  ['completed', 'failed', 'review'].forEach(dir => {
     const p = path.join(TASKS_DIR, dir);
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
   });
   if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
 
-  const pendingTasks = fs.readdirSync(TASKS_DIR)
-    .filter(f => f.endsWith('.md') && !fs.statSync(path.join(TASKS_DIR, f)).isDirectory());
+  // Failed tasks get priority
+  const failedTasks = fs.readdirSync(FAILED_DIR)
+    .filter(f => f.endsWith('.md'))
+    .map(f => ({ file: f, dir: FAILED_DIR, isRetry: true }));
+
+  const newTasks = fs.readdirSync(TASKS_DIR)
+    .filter(f => f.endsWith('.md') && !fs.statSync(path.join(TASKS_DIR, f)).isDirectory())
+    .map(f => ({ file: f, dir: TASKS_DIR, isRetry: false }));
+
+  const pendingTasks = [...failedTasks, ...newTasks];
 
   if (pendingTasks.length === 0) {
     console.log('😴 No tasks found.');
     return;
   }
 
-  console.log(`✅ Found ${pendingTasks.length} tasks!`);
+  console.log(`✅ Found ${pendingTasks.length} tasks! (${failedTasks.length} retries, ${newTasks.length} new)`);
   let finalReport = `🤖 *דיווח סוכן קלוד*\n\n`;
 
-  for (const taskFile of pendingTasks.slice(0, 2)) {
+  finalReport += `🔄 *איטרציות:* ${iterationCount}/${MAX_REVIEW_ITERATIONS}\n`;
+
+  for (const task of pendingTasks.slice(0, 2)) {
+    const { file: taskFile, dir: taskDir, isRetry } = task;
     const project = getProjectFromFilename(taskFile);
 
     if (!project) {
@@ -212,7 +236,7 @@ async function executeTasksBatch() {
     const repoDir = path.join(WORK_DIR, `${slug}-${Date.now()}`);
     const taskName = getTaskName(taskFile);
 
-    console.log(`\n📦 Cloning ${slug}...`);
+    console.log(`\n📦 Cloning ${slug}... ${isRetry ? '🔁 (retry)' : ''}`);
     if (!runCommand(`git clone ${repoUrl} ${repoDir}`, WORK_DIR)) {
       finalReport += `❌ *Clone נכשל:* ${slug}\n\n`;
       continue;
@@ -224,14 +248,14 @@ async function executeTasksBatch() {
     // Copy task into repo
     const repoTasksDir = path.join(repoDir, 'tasks');
     if (!fs.existsSync(repoTasksDir)) fs.mkdirSync(repoTasksDir, { recursive: true });
-    fs.copyFileSync(path.join(TASKS_DIR, taskFile), path.join(repoTasksDir, taskFile));
+    fs.copyFileSync(path.join(taskDir, taskFile), path.join(repoTasksDir, taskFile));
 
     // Create feature branch
-    const branchName = `feature/auto-${taskName}-${Date.now()}`;
+    const branchName = `feature/${isRetry ? 'retry' : 'auto'}-${taskName}-${Date.now()}`;
     runCommand(`git checkout -b ${branchName}`, repoDir);
 
     // ── AGENT 1: DEVELOPER ──
-    console.log(`\n🔨 [DEVELOPER] Starting task: ${taskFile}`);
+    console.log(`\n🔨 [DEVELOPER] ${isRetry ? 'Retrying' : 'Starting'} task: ${taskFile}`);
     const { success: devSuccess, reviewFile } = await runDeveloperAgent(repoDir, taskFile);
 
     if (!devSuccess) {
@@ -248,18 +272,19 @@ async function executeTasksBatch() {
       fs.unlinkSync(summaryPath);
     }
 
-    // Commit developer work
+    // Commit developer work (keep task file for reviewer)
     runCommand('git add .', repoDir);
     runCommand(`git commit -m "Dev: ${taskFile}"`, repoDir);
 
     // ── AGENT 2: REVIEWER ──
     let reviewStatus = '';
     let reviewNotes = '';
-
-    for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
+    let iterationCount = 0;
+for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
       console.log(`\n✅ [REVIEWER] Iteration ${i}/${MAX_REVIEW_ITERATIONS}`);
       const { passed, fixed, failed, resultContent } = await runReviewerAgent(repoDir, taskFile, reviewFile, i);
 
+      iterationCount = i;
       reviewNotes = resultContent;
 
       if (passed) {
@@ -280,40 +305,57 @@ async function executeTasksBatch() {
       }
     }
 
+    // Cleanup task file from repo
     if (fs.existsSync(path.join(repoTasksDir, taskFile))) {
-        fs.unlinkSync(path.join(repoTasksDir, taskFile));
-        runCommand('git add .', repoDir);
-        runCommand(`git commit -m "Cleanup: ${taskFile}"`, repoDir);
-      }
-          // Push branch
+      fs.unlinkSync(path.join(repoTasksDir, taskFile));
+      runCommand('git add .', repoDir);
+      runCommand(`git commit -m "Cleanup: ${taskFile}"`, repoDir);
+    }
+
+    // Push branch
     const pushed = runCommand(`git push ${getAuthUrl(repoUrl)} ${branchName}`, repoDir);
 
     if (pushed) {
       const isSuccess = reviewStatus.includes('✅') || reviewStatus.includes('🔧');
-
-      // Move task to correct folder
       const destDir = isSuccess ? COMPLETED_DIR : FAILED_DIR;
-      fs.renameSync(path.join(TASKS_DIR, taskFile), path.join(destDir, taskFile));
+       finalReport += `${isRetry ? '🔁 *ריטריי*\n' : ''}`;
+    finalReport += `📁 *פרויקט:* ${slug}\n`;
+    finalReport += `📄 *משימה:* ${taskName}\n`;
+    finalReport += `🌿 *ברנץ':* \`${branchName}\`\n`;
+    finalReport += `💡 *פיתוח:* ${summary}\n`;
+    finalReport += `🔍 *בדיקה:* ${reviewStatus}\n`;
+    finalReport += `🔄 *איטרציות:* ${iterationCount}/${MAX_REVIEW_ITERATIONS}\n`;
+     if (reviewNotes) {
+      const issuesMatch = reviewNotes.match(/## Issues found:([\s\S]*?)(?=##|$)/);
+      if (issuesMatch) finalReport += `⚠️ *בעיות שנמצאו:*\n${issuesMatch[1].trim()}\n`;
+
+      const fixesMatch = reviewNotes.match(/## Fixes applied:([\s\S]*?)(?=##|$)/);
+      if (fixesMatch) finalReport += `🔧 *תיקונים שבוצעו:*\n${fixesMatch[1].trim()}\n`;
+
+      const notesMatch = reviewNotes.match(/## Notes:([\s\S]*?)(?=##|$)/);
+      if (notesMatch) finalReport += `📝 *הערות:*\n${notesMatch[1].trim()}\n`;
+    }
+      // Move task — remove from old location first
+      if (fs.existsSync(path.join(taskDir, taskFile))) {
+        fs.renameSync(path.join(taskDir, taskFile), path.join(destDir, taskFile));
+      }
 
       // Update agent repo
       runCommand('git checkout main', __dirname);
       runCommand('git pull origin main', __dirname);
       runCommand('git add .', __dirname);
-      runCommand(`git commit -m "${isSuccess ? 'Done' : 'Failed'}: ${taskFile}"`, __dirname);
+      runCommand(`git commit -m "${isSuccess ? 'Done' : 'Failed'}: ${taskFile}${isRetry ? ' (retry)' : ''}"`, __dirname);
       runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
 
-      finalReport += `📁 *פרויקט:* ${slug}\n`;
-      finalReport += `📄 *משימה:* ${taskName}\n`;
-      finalReport += `🌿 *ברנץ':* \`${branchName}\`\n`;
-      finalReport += `💡 *פיתוח:* ${summary}\n`;
-      finalReport += `🔍 *בדיקה:* ${reviewStatus}\n\n`;
+     
     } else {
       finalReport += `⚠️ *Push נכשל:* ${taskFile} (${slug})\n\n`;
     }
 
-    // Cleanup
+    // Cleanup workspace
     fs.rmSync(repoDir, { recursive: true, force: true });
   }
+    finalReport += '\n';
 
   await sendTelegram(finalReport);
   console.log('🏁 Batch finished.');
