@@ -76,6 +76,8 @@ async function pullLatestTasks() {
 
 async function executeTasksBatch() {
   // שלב 0 — משוך משימות חדשות מה-repo
+  runCommand('git config --global user.email "claude-bot@automation.local"', __dirname);
+  runCommand('git config --global user.name "Claude Agent"', __dirname);
   await pullLatestTasks();
 
   console.log('\n[!] Scanning for tasks...');
