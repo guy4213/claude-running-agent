@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 const axios = require('axios');
-
+require('dotenv').config();
 // ================================================
 // 🔐 CREDENTIALS — הגדר אלה ב-Render Environment Variables
 // ================================================
