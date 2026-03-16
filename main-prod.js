@@ -4,6 +4,11 @@ const path = require('path');
 const cron = require('node-cron');
 const axios = require('axios');
 require('dotenv').config();
+
+const http = require('http');
+http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000, () => {
+  console.log(`🟢 Server listening on port ${process.env.PORT || 3000}`);
+});
 // ================================================
 // 🔐 CREDENTIALS — הגדר אלה ב-Render Environment Variables
 // ================================================
