@@ -141,7 +141,12 @@ async function updateRenderSecret(newCredentials) {
 function runCommand(command, cwd) {
   try {
     console.log(`\n[🏃 ${cwd ? path.basename(cwd) : ''}]: ${command}`);
-    execSync(command, { stdio: 'inherit', encoding: 'utf-8', cwd });
+    execSync(command, {
+      stdio: 'inherit',
+      encoding: 'utf-8',
+      cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
     return true;
   } catch (error) {
     console.error(`\n[❌ Failed]: ${error.message}`);
