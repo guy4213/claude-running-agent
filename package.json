@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "main-prod.js",
   "scripts": {
-    "start": "mkdir -p /root/.claude && cp /etc/secrets/credentials.json /root/.claude/.credentials.json && node main-prod.js"
+    "start": "node main-prod.js"
   },
   "dependencies": {
     "axios": "^1.7.0",

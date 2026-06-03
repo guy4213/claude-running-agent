@@ -42,21 +42,6 @@ const MAX_REVIEW_ITERATIONS = 2;
 
 // ================================================
 
-// ================================================
-// 🔑 TOKEN REFRESH
-// ================================================
-async function refreshClaudeToken() {
-  console.log('\n[🔑] Refreshing Claude token...');
-  const result = runCommand('npx claude --version', __dirname);
-  if (result) {
-    // וודא שה-credentials מועתקים נכון ל-HOME
-    runCommand(`cp /etc/secrets/credentials.json $HOME/.claude/.credentials.json`, __dirname);
-    console.log('✅ Claude token ready');
-  } else {
-    await sendTelegram('⚠️ *שגיאה:* Claude token פג תוקף');
-  }
-  return result;
-}
 async function sendTelegram(message) {
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -294,8 +279,6 @@ If the file does not start with "## Status:" the pipeline will break.
 // 🚀 MAIN TASK RUNNER
 // ================================================
 async function executeTasksBatch() {
-    await refreshClaudeToken();
-
   // Setup git identity
   runCommand('git config --global user.email "claude-bot@automation.local"', __dirname);
   runCommand('git config --global user.name "Claude Agent"', __dirname);
