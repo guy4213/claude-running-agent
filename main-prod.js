@@ -38,7 +38,7 @@ const TASKS_DIR = path.join(__dirname, 'tasks');
 const COMPLETED_DIR = path.join(TASKS_DIR, 'completed');
 const FAILED_DIR = path.join(TASKS_DIR, 'failed');
 const WORK_DIR = path.join(__dirname, 'workspace');
-const MAX_REVIEW_ITERATIONS = 2;
+const MAX_REVIEW_ITERATIONS = 3;
 
 let isRunning = false;
 let lastReport = '';
@@ -252,11 +252,29 @@ function getTaskName(taskFile) {
 // ================================================
 // 🔨 AGENT 1 — DEVELOPER
 // ================================================
-async function runDeveloperAgent(repoDir, taskFile) {
+async function runDeveloperAgent(repoDir, taskFile, isRetry = false) {
   const taskName = getTaskName(taskFile);
 const reviewFile = `tasks/review/review-${taskName}.md`;
 
-  const prompt = `
+  const prompt = isRetry ? `
+You are a senior developer fixing a failed code review. Follow these steps exactly:
+
+1. Read CONTEXT.md in the project root if it exists.
+2. Read tasks/${taskFile} — focus ONLY on the "❌ סיבת הכישלון" section. These are the exact issues you must fix.
+3. Open the files mentioned in the failure notes and fix ONLY the specific issues listed. Do not rewrite working code.
+4. Create the directory "tasks/review/" if it doesn't exist, then update or create "${reviewFile}" with:
+## What I fixed
+[1-2 sentences describing exactly what you changed]
+
+## Files changed
+[list every file you modified]
+
+## How to verify
+[copy the Review Criteria from the task file, noting which specific fixes address which criteria]
+
+5. Write summary.txt in the project root with 1 sentence in Hebrew about what you fixed.
+6. Exit.
+`.trim() : `
 You are a senior developer. Follow these steps exactly:
 
 1. Read CONTEXT.md in the project root if it exists — understand the project stack and conventions.
@@ -430,12 +448,31 @@ async function executeTasksBatch() {
     fs.copyFileSync(path.join(taskDir, taskFile), path.join(repoTasksDir, taskFile));
 
     // Create feature branch
-    const branchName = `feature/${isRetry ? 'retry' : 'auto'}-${taskName}-${Date.now()}`;
-    await runCommand(`git checkout -b ${branchName}`, repoDir);
+    let branchName = `feature/${isRetry ? 'retry' : 'auto'}-${taskName}-${Date.now()}`;
+    if (isRetry) {
+      const taskContent = fs.readFileSync(path.join(taskDir, taskFile), 'utf-8');
+      const branchMatch = taskContent.match(/## 🔁 Retry Branch\n(.+)/);
+      const existingBranch = branchMatch ? branchMatch[1].trim() : null;
+
+      if (existingBranch) {
+        const fetched = await runCommand(`git fetch origin`, repoDir);
+        const checkedOut = await runCommand(`git checkout ${existingBranch}`, repoDir);
+        if (fetched && checkedOut) {
+          branchName = existingBranch;
+          console.log(`🔁 Checked out existing branch: ${existingBranch}`);
+        } else {
+          await runCommand(`git checkout -b ${branchName}`, repoDir);
+        }
+      } else {
+        await runCommand(`git checkout -b ${branchName}`, repoDir);
+      }
+    } else {
+      await runCommand(`git checkout -b ${branchName}`, repoDir);
+    }
 
     // ── AGENT 1: DEVELOPER ──
     console.log(`\n🔨 [DEVELOPER] ${isRetry ? 'Retrying' : 'Starting'} task: ${taskFile}`);
-    const { success: devSuccess, reviewFile } = await runDeveloperAgent(repoDir, taskFile);
+    const { success: devSuccess, reviewFile } = await runDeveloperAgent(repoDir, taskFile, isRetry);
 
     if (!devSuccess) {
       finalReport += `❌ <b>Developer נכשל:</b> ${taskFile} (${slug})\n\n`;
@@ -518,11 +555,23 @@ async function executeTasksBatch() {
       }
       // Move task — remove from old location first
       if (fs.existsSync(path.join(taskDir, taskFile))) {
-        const destPath = path.join(destDir, taskFile);
-        fs.renameSync(path.join(taskDir, taskFile), destPath);
         if (!isSuccess && reviewNotes) {
-          const failureNotes = `\n\n---\n## ❌ סיבת הכישלון (נוספה אוטומטית)\n${reviewNotes}`;
-          fs.appendFileSync(destPath, failureNotes);
+          const failureAddition = `\n\n---\n## ❌ סיבת הכישלון\n${reviewNotes}\n\n## 🔁 Retry Branch\n${branchName}`;
+
+          if (isRetry) {
+            // קובץ כבר בfailed — מעדכן תוכן בלי להזיז
+            const current = fs.readFileSync(path.join(taskDir, taskFile), 'utf-8');
+            const stripped = current.replace(/\n\n---\n## ❌[\s\S]*$/, '');
+            fs.writeFileSync(path.join(taskDir, taskFile), stripped + failureAddition);
+          } else {
+            // משימה חדשה — מזיז לfailed ומוסיף הערות
+            const destPath = path.join(destDir, taskFile);
+            fs.renameSync(path.join(taskDir, taskFile), destPath);
+            fs.appendFileSync(destPath, failureAddition);
+          }
+        } else if (!isRetry) {
+          // הצלחה — מזיז לcompleted
+          fs.renameSync(path.join(taskDir, taskFile), path.join(destDir, taskFile));
         }
       }
 
