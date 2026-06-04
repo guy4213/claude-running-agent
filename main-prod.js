@@ -1,4 +1,4 @@
-const { execSync } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
@@ -170,11 +170,11 @@ ${description}
             fs.writeFileSync(filePath, content);
 
             // Commit and push to agent repo
-            runCommand('git checkout main', __dirname);
-            runCommand('git pull origin main', __dirname);
-            runCommand('git add .', __dirname);
-            runCommand(`git commit -m "Task: ${filename}"`, __dirname);
-            runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
+            await runCommand('git checkout main', __dirname);
+            await runCommand('git pull origin main', __dirname);
+            await runCommand('git add .', __dirname);
+            await runCommand(`git commit -m "Task: ${filename}"`, __dirname);
+            await runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
 
             await sendTelegram(`✅ <b>משימה נוצרה:</b> <code>${filename}</code>\nתרוץ בציקל הבא או שלח /run`);
           }
@@ -219,19 +219,20 @@ async function updateRenderSecret(newCredentials) {
 }
 
 function runCommand(command, cwd) {
-  try {
+  return new Promise((resolve) => {
     console.log(`\n[🏃 ${cwd ? path.basename(cwd) : ''}]: ${command}`);
-    execSync(command, {
+    const child = spawn(command, [], {
       stdio: 'inherit',
-      encoding: 'utf-8',
       cwd,
+      shell: true,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
     });
-    return true;
-  } catch (error) {
-    console.error(`\n[❌ Failed]: ${error.message}`);
-    return false;
-  }
+    child.on('close', (code) => resolve(code === 0));
+    child.on('error', (err) => {
+      console.error(`\n[❌ Failed]: ${err.message}`);
+      resolve(false);
+    });
+  });
 }
 
 function getAuthUrl(repoUrl) {
@@ -275,7 +276,7 @@ You are a senior developer. Follow these steps exactly:
 6. Exit.
 `.trim();
 
-  const success = runCommand(
+  const success = await runCommand(
     `npx claude -p "${prompt}" --dangerously-skip-permissions`,
     repoDir
   );
@@ -340,7 +341,7 @@ The line must start with "## Status:" — not "Result:", not "Verdict:", not "PA
 If the file does not start with "## Status:" the pipeline will break.
 `.trim();
 
-  const success = runCommand(
+  const success = await runCommand(
     `npx claude -p "${prompt}" --dangerously-skip-permissions`,
     repoDir
   );
@@ -367,13 +368,13 @@ async function executeTasksBatch() {
   isRunning = true;
   try {
   // Setup git identity
-  runCommand('git config --global user.email "claude-bot@automation.local"', __dirname);
-  runCommand('git config --global user.name "Claude Agent"', __dirname);
+  await runCommand('git config --global user.email "claude-bot@automation.local"', __dirname);
+  await runCommand('git config --global user.name "Claude Agent"', __dirname);
 
   // Pull latest tasks
   console.log('\n[🔄] Pulling latest tasks from GitHub...');
-  runCommand(`git remote set-url origin ${getAuthUrl(AGENT_REPO)} 2>/dev/null || git remote add origin ${getAuthUrl(AGENT_REPO)}`, __dirname);
-  runCommand('git pull origin main', __dirname);
+  await runCommand(`git remote set-url origin ${getAuthUrl(AGENT_REPO)} 2>/dev/null || git remote add origin ${getAuthUrl(AGENT_REPO)}`, __dirname);
+  await runCommand('git pull origin main', __dirname);
 
   console.log('\n[!] Scanning for tasks...');
 
@@ -415,13 +416,13 @@ async function executeTasksBatch() {
     const taskName = getTaskName(taskFile);
 
     console.log(`\n📦 Cloning ${slug}... ${isRetry ? '🔁 (retry)' : ''}`);
-    if (!runCommand(`git clone ${repoUrl} ${repoDir}`, WORK_DIR)) {
+    if (!await runCommand(`git clone ${repoUrl} ${repoDir}`, WORK_DIR)) {
       finalReport += `❌ <b>Clone נכשל:</b> ${slug}\n\n`;
       continue;
     }
 
-    runCommand(`git config user.email "claude-bot@automation.local"`, repoDir);
-    runCommand(`git config user.name "Claude Agent"`, repoDir);
+    await runCommand(`git config user.email "claude-bot@automation.local"`, repoDir);
+    await runCommand(`git config user.name "Claude Agent"`, repoDir);
 
     // Copy task into repo
     const repoTasksDir = path.join(repoDir, 'tasks');
@@ -430,7 +431,7 @@ async function executeTasksBatch() {
 
     // Create feature branch
     const branchName = `feature/${isRetry ? 'retry' : 'auto'}-${taskName}-${Date.now()}`;
-    runCommand(`git checkout -b ${branchName}`, repoDir);
+    await runCommand(`git checkout -b ${branchName}`, repoDir);
 
     // ── AGENT 1: DEVELOPER ──
     console.log(`\n🔨 [DEVELOPER] ${isRetry ? 'Retrying' : 'Starting'} task: ${taskFile}`);
@@ -451,8 +452,8 @@ async function executeTasksBatch() {
     }
 
     // Commit developer work (keep task file for reviewer)
-    runCommand('git add .', repoDir);
-    runCommand(`git commit -m "Dev: ${taskFile}"`, repoDir);
+    await runCommand('git add .', repoDir);
+    await runCommand(`git commit -m "Dev: ${taskFile}"`, repoDir);
 
     // ── AGENT 2: REVIEWER ──
     let reviewStatus = '';
@@ -467,18 +468,18 @@ async function executeTasksBatch() {
 
       if (passed) {
         reviewStatus = '✅ עבר בדיקה';
-        runCommand('git add .', repoDir);
-        runCommand(`git commit -m "Review passed: ${taskFile}"`, repoDir);
+        await runCommand('git add .', repoDir);
+        await runCommand(`git commit -m "Review passed: ${taskFile}"`, repoDir);
         break;
       } else if (fixed) {
         reviewStatus = `🔧 תוקן באיטרציה ${i}`;
-        runCommand('git add .', repoDir);
-        runCommand(`git commit -m "Review fix ${i}: ${taskFile}"`, repoDir);
+        await runCommand('git add .', repoDir);
+        await runCommand(`git commit -m "Review fix ${i}: ${taskFile}"`, repoDir);
         if (i === MAX_REVIEW_ITERATIONS) break;
       } else if (failed) {
         reviewStatus = '❌ נכשל בדיקה';
-        runCommand('git add .', repoDir);
-        runCommand(`git commit -m "Review failed: ${taskFile}"`, repoDir);
+        await runCommand('git add .', repoDir);
+        await runCommand(`git commit -m "Review failed: ${taskFile}"`, repoDir);
         break;
       }
     }
@@ -486,12 +487,12 @@ async function executeTasksBatch() {
     // Cleanup task file from repo
     if (fs.existsSync(path.join(repoTasksDir, taskFile))) {
       fs.unlinkSync(path.join(repoTasksDir, taskFile));
-      runCommand('git add .', repoDir);
-      runCommand(`git commit -m "Cleanup: ${taskFile}"`, repoDir);
+      await runCommand('git add .', repoDir);
+      await runCommand(`git commit -m "Cleanup: ${taskFile}"`, repoDir);
     }
 
     // Push branch
-    const pushed = runCommand(`git push ${getAuthUrl(repoUrl)} ${branchName}`, repoDir);
+    const pushed = await runCommand(`git push ${getAuthUrl(repoUrl)} ${branchName}`, repoDir);
     if (!reviewStatus) {
       reviewStatus = '⚠️ סטטוס לא זוהה — בדוק לוגים';
     }
@@ -526,12 +527,12 @@ async function executeTasksBatch() {
       }
 
       // Update agent repo
-      runCommand('git checkout main', __dirname);
-      runCommand('git pull origin main', __dirname);
-      runCommand('git add .', __dirname);
-      const committed = runCommand(`git commit -m "${isSuccess ? 'Done' : 'Failed'}: ${taskFile}${isRetry ? ' (retry)' : ''}"`, __dirname);
+      await runCommand('git checkout main', __dirname);
+      await runCommand('git pull origin main', __dirname);
+      await runCommand('git add .', __dirname);
+      const committed = await runCommand(`git commit -m "${isSuccess ? 'Done' : 'Failed'}: ${taskFile}${isRetry ? ' (retry)' : ''}"`, __dirname);
       if (committed) {
-        runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
+        await runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
       }
 
     } else {
