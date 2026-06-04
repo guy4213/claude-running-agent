@@ -555,11 +555,23 @@ async function executeTasksBatch() {
       }
       // Move task — remove from old location first
       if (fs.existsSync(path.join(taskDir, taskFile))) {
-        const destPath = path.join(destDir, taskFile);
-        fs.renameSync(path.join(taskDir, taskFile), destPath);
         if (!isSuccess && reviewNotes) {
-          const failureNotes = `\n\n---\n## ❌ סיבת הכישלון (נוספה אוטומטית)\n${reviewNotes}\n\n## 🔁 Retry Branch\n${branchName}`;
-          fs.appendFileSync(destPath, failureNotes);
+          const failureAddition = `\n\n---\n## ❌ סיבת הכישלון\n${reviewNotes}\n\n## 🔁 Retry Branch\n${branchName}`;
+
+          if (isRetry) {
+            // קובץ כבר בfailed — מעדכן תוכן בלי להזיז
+            const current = fs.readFileSync(path.join(taskDir, taskFile), 'utf-8');
+            const stripped = current.replace(/\n\n---\n## ❌[\s\S]*$/, '');
+            fs.writeFileSync(path.join(taskDir, taskFile), stripped + failureAddition);
+          } else {
+            // משימה חדשה — מזיז לfailed ומוסיף הערות
+            const destPath = path.join(destDir, taskFile);
+            fs.renameSync(path.join(taskDir, taskFile), destPath);
+            fs.appendFileSync(destPath, failureAddition);
+          }
+        } else if (!isRetry) {
+          // הצלחה — מזיז לcompleted
+          fs.renameSync(path.join(taskDir, taskFile), path.join(destDir, taskFile));
         }
       }
 
