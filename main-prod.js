@@ -40,19 +40,27 @@ const FAILED_DIR = path.join(TASKS_DIR, 'failed');
 const WORK_DIR = path.join(__dirname, 'workspace');
 const MAX_REVIEW_ITERATIONS = 2;
 
+let isRunning = false;
+let lastReport = '';
+
 // ================================================
 
 async function sendTelegram(message) {
   try {
+    const safe = message
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
-      text: message,
-      parse_mode: 'Markdown'
+      text: safe,
+      parse_mode: 'HTML'
     });
   } catch (e) {
     console.error('❌ Telegram failed:', e.message);
   }
 }
+
 // ================================================
 // 🔄 TELEGRAM REFRESH COMMAND
 // ================================================
@@ -78,10 +86,48 @@ async function handleTelegramUpdates() {
         // רק מה-chat שלך
         if (chatId !== TELEGRAM_CHAT_ID) continue;
 
-        if (text === '/refresh') {
+        if (text === '/status') {
+          const pendingCount = fs.existsSync(TASKS_DIR)
+            ? fs.readdirSync(TASKS_DIR).filter(f => f.endsWith('.md') && !fs.statSync(path.join(TASKS_DIR, f)).isDirectory()).length
+            : 0;
+          const failedCount = fs.existsSync(FAILED_DIR)
+            ? fs.readdirSync(FAILED_DIR).filter(f => f.endsWith('.md')).length
+            : 0;
+          const statusMsg =
+            `<b>סטטוס סוכן קלוד</b>\n\n` +
+            `${isRunning ? '🟢 כרגע רץ' : '😴 לא רץ'}\n` +
+            `📋 משימות ממתינות: ${pendingCount}\n` +
+            `🔁 ממתינות לretry: ${failedCount}\n\n` +
+            (lastReport ? `<b>דיווח אחרון:</b>\n${lastReport.substring(0, 500)}` : 'אין דיווח עדיין');
+          await sendTelegram(statusMsg);
+
+        } else if (text === '/tasks') {
+          const pendingTasks = fs.existsSync(TASKS_DIR)
+            ? fs.readdirSync(TASKS_DIR).filter(f => f.endsWith('.md') && !fs.statSync(path.join(TASKS_DIR, f)).isDirectory())
+            : [];
+          const failedTasks = fs.existsSync(FAILED_DIR)
+            ? fs.readdirSync(FAILED_DIR).filter(f => f.endsWith('.md'))
+            : [];
+          let taskMsg = `📋 <b>משימות ממתינות:</b>\n`;
+          if (pendingTasks.length === 0) taskMsg += 'אין\n';
+          else pendingTasks.forEach(f => { taskMsg += `• ${f}\n`; });
+          taskMsg += `\n🔁 <b>ממתינות לretry:</b>\n`;
+          if (failedTasks.length === 0) taskMsg += 'אין';
+          else failedTasks.forEach(f => { taskMsg += `• ${f}\n`; });
+          await sendTelegram(taskMsg);
+
+        } else if (text === '/run') {
+          if (isRunning) {
+            await sendTelegram('⚠️ כבר רץ');
+          } else {
+            await sendTelegram('🚀 מריץ עכשיו...');
+            executeTasksBatch().catch(err => console.error('CRITICAL ERROR:', err));
+          }
+
+        } else if (text === '/refresh') {
           waitingForCredentials = true;
           await sendTelegram(
-            '🔑 *רענון טוקן*\n\nשלח את תוכן הקובץ `.credentials.json` שלך:'
+            '🔑 <b>רענון טוקן</b>\n\nשלח את תוכן הקובץ <code>.credentials.json</code> שלך:'
           );
 
         } else if (waitingForCredentials && text.startsWith('{')) {
@@ -94,10 +140,43 @@ async function handleTelegramUpdates() {
 
             // עדכן את ה-Secret File ב-Render
             await updateRenderSecret(text);
-            await sendTelegram('✅ *טוקן עודכן בהצלחה!*\nהשירות יעלה מחדש תוך כדקה.');
+            await sendTelegram('✅ <b>טוקן עודכן בהצלחה!</b>\nהשירות יעלה מחדש תוך כדקה.');
 
           } catch (e) {
-            await sendTelegram(`❌ *שגיאה:* ${e.message}\nוודא שהפורמט נכון.`);
+            await sendTelegram(`❌ <b>שגיאה:</b> ${e.message}\nוודא שהפורמט נכון.`);
+          }
+
+        } else {
+          // Task injection
+          const taskMatch = text.match(/^(pali|stockbot|diamonds):\s*(.+)$/is);
+          if (taskMatch) {
+            const slug = taskMatch[1].toLowerCase();
+            const description = taskMatch[2].trim();
+            const timestamp = Date.now();
+            const filename = `${slug}-telegram-${timestamp}.md`;
+            const filePath = path.join(TASKS_DIR, filename);
+
+            const content = `Task: ${description}
+
+## 🔨 Implementation
+${description}
+
+## ✅ Review Criteria
+- המשימה מומשה במלואה
+- הקוד תואם לסגנון הקיים
+- אין console.log מיותרים
+- אין שגיאות TypeScript
+`;
+            fs.writeFileSync(filePath, content);
+
+            // Commit and push to agent repo
+            runCommand('git checkout main', __dirname);
+            runCommand('git pull origin main', __dirname);
+            runCommand('git add .', __dirname);
+            runCommand(`git commit -m "Task: ${filename}"`, __dirname);
+            runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
+
+            await sendTelegram(`✅ <b>משימה נוצרה:</b> <code>${filename}</code>\nתרוץ בציקל הבא או שלח /run`);
           }
         }
       }
@@ -138,10 +217,16 @@ async function updateRenderSecret(newCredentials) {
     { headers: { Authorization: `Bearer ${RENDER_API_KEY}` } }
   );
 }
+
 function runCommand(command, cwd) {
   try {
     console.log(`\n[🏃 ${cwd ? path.basename(cwd) : ''}]: ${command}`);
-    execSync(command, { stdio: 'inherit', encoding: 'utf-8', cwd });
+    execSync(command, {
+      stdio: 'inherit',
+      encoding: 'utf-8',
+      cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
     return true;
   } catch (error) {
     console.error(`\n[❌ Failed]: ${error.message}`);
@@ -248,7 +333,7 @@ CRITICAL: Write tasks/review/review-result.md starting with EXACTLY this line (c
 ## Status: ✅ PASSED
 or
 ## Status: 🔧 FIXED
-or  
+or
 ## Status: ❌ FAILED
 
 The line must start with "## Status:" — not "Result:", not "Verdict:", not "PASS", not "APPROVED".
@@ -279,6 +364,8 @@ If the file does not start with "## Status:" the pipeline will break.
 // 🚀 MAIN TASK RUNNER
 // ================================================
 async function executeTasksBatch() {
+  isRunning = true;
+  try {
   // Setup git identity
   runCommand('git config --global user.email "claude-bot@automation.local"', __dirname);
   runCommand('git config --global user.name "Claude Agent"', __dirname);
@@ -313,13 +400,13 @@ async function executeTasksBatch() {
   }
 
   console.log(`✅ Found ${pendingTasks.length} tasks! (${failedTasks.length} retries, ${newTasks.length} new)`);
-  let finalReport = `🤖 *דיווח סוכן קלוד*\n\n`;
+  let finalReport = `🤖 <b>דיווח סוכן קלוד</b>\n\n`;
   for (const task of pendingTasks.slice(0, 2)) {
     const { file: taskFile, dir: taskDir, isRetry } = task;
     const project = getProjectFromFilename(taskFile);
 
     if (!project) {
-      finalReport += `⚠️ *דילוג:* ${taskFile} — לא נמצא פרויקט\n\n`;
+      finalReport += `⚠️ <b>דילוג:</b> ${taskFile} — לא נמצא פרויקט\n\n`;
       continue;
     }
 
@@ -329,7 +416,7 @@ async function executeTasksBatch() {
 
     console.log(`\n📦 Cloning ${slug}... ${isRetry ? '🔁 (retry)' : ''}`);
     if (!runCommand(`git clone ${repoUrl} ${repoDir}`, WORK_DIR)) {
-      finalReport += `❌ *Clone נכשל:* ${slug}\n\n`;
+      finalReport += `❌ <b>Clone נכשל:</b> ${slug}\n\n`;
       continue;
     }
 
@@ -350,7 +437,7 @@ async function executeTasksBatch() {
     const { success: devSuccess, reviewFile } = await runDeveloperAgent(repoDir, taskFile);
 
     if (!devSuccess) {
-      finalReport += `❌ *Developer נכשל:* ${taskFile} (${slug})\n\n`;
+      finalReport += `❌ <b>Developer נכשל:</b> ${taskFile} (${slug})\n\n`;
       fs.rmSync(repoDir, { recursive: true, force: true });
       continue;
     }
@@ -371,7 +458,7 @@ async function executeTasksBatch() {
     let reviewStatus = '';
     let reviewNotes = '';
     let iterationCount = 0;
-for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
+    for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
       console.log(`\n✅ [REVIEWER] Iteration ${i}/${MAX_REVIEW_ITERATIONS}`);
       const { passed, fixed, failed, resultContent } = await runReviewerAgent(repoDir, taskFile, reviewFile, i);
 
@@ -405,32 +492,37 @@ for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
 
     // Push branch
     const pushed = runCommand(`git push ${getAuthUrl(repoUrl)} ${branchName}`, repoDir);
-      if (!reviewStatus) {
-        reviewStatus = '⚠️ סטטוס לא זוהה — בדוק לוגים';
-      }
+    if (!reviewStatus) {
+      reviewStatus = '⚠️ סטטוס לא זוהה — בדוק לוגים';
+    }
     if (pushed) {
       const isSuccess = reviewStatus.includes('✅') || reviewStatus.includes('🔧');
       const destDir = isSuccess ? COMPLETED_DIR : FAILED_DIR;
-       finalReport += `${isRetry ? '🔁 *ריטריי*\n' : ''}`;
-    finalReport += `📁 *פרויקט:* ${slug}\n`;
-    finalReport += `📄 *משימה:* ${taskName}\n`;
-    finalReport += `🌿 *ברנץ':* \`${branchName}\`\n`;
-    finalReport += `💡 *פיתוח:* ${summary}\n`;
-    finalReport += `🔍 *בדיקה:* ${reviewStatus}\n`;
-    finalReport += `🔄 *איטרציות:* ${iterationCount}/${MAX_REVIEW_ITERATIONS}\n`;
-     if (reviewNotes) {
-      const issuesMatch = reviewNotes.match(/## Issues found:([\s\S]*?)(?=##|$)/);
-      if (issuesMatch) finalReport += `⚠️ *בעיות שנמצאו:*\n${issuesMatch[1].trim()}\n`;
+      finalReport += `${isRetry ? '🔁 <b>ריטריי</b>\n' : ''}`;
+      finalReport += `📁 <b>פרויקט:</b> ${slug}\n`;
+      finalReport += `📄 <b>משימה:</b> ${taskName}\n`;
+      finalReport += `🌿 <b>ברנץ':</b> <code>${branchName}</code>\n`;
+      finalReport += `💡 <b>פיתוח:</b> ${summary}\n`;
+      finalReport += `🔍 <b>בדיקה:</b> ${reviewStatus}\n`;
+      finalReport += `🔄 <b>איטרציות:</b> ${iterationCount}/${MAX_REVIEW_ITERATIONS}\n`;
+      if (reviewNotes) {
+        const issuesMatch = reviewNotes.match(/## Issues found:([\s\S]*?)(?=##|$)/);
+        if (issuesMatch) finalReport += `⚠️ <b>בעיות שנמצאו:</b>\n${issuesMatch[1].trim()}\n`;
 
-      const fixesMatch = reviewNotes.match(/## Fixes applied:([\s\S]*?)(?=##|$)/);
-      if (fixesMatch) finalReport += `🔧 *תיקונים שבוצעו:*\n${fixesMatch[1].trim()}\n`;
+        const fixesMatch = reviewNotes.match(/## Fixes applied:([\s\S]*?)(?=##|$)/);
+        if (fixesMatch) finalReport += `🔧 <b>תיקונים שבוצעו:</b>\n${fixesMatch[1].trim()}\n`;
 
-      const notesMatch = reviewNotes.match(/## Notes:([\s\S]*?)(?=##|$)/);
-      if (notesMatch) finalReport += `📝 *הערות:*\n${notesMatch[1].trim()}\n`;
-    }
+        const notesMatch = reviewNotes.match(/## Notes:([\s\S]*?)(?=##|$)/);
+        if (notesMatch) finalReport += `📝 <b>הערות:</b>\n${notesMatch[1].trim()}\n`;
+      }
       // Move task — remove from old location first
       if (fs.existsSync(path.join(taskDir, taskFile))) {
-        fs.renameSync(path.join(taskDir, taskFile), path.join(destDir, taskFile));
+        const destPath = path.join(destDir, taskFile);
+        fs.renameSync(path.join(taskDir, taskFile), destPath);
+        if (!isSuccess && reviewNotes) {
+          const failureNotes = `\n\n---\n## ❌ סיבת הכישלון (נוספה אוטומטית)\n${reviewNotes}`;
+          fs.appendFileSync(destPath, failureNotes);
+        }
       }
 
       // Update agent repo
@@ -439,23 +531,26 @@ for (let i = 1; i <= MAX_REVIEW_ITERATIONS; i++) {
       runCommand('git add .', __dirname);
       const committed = runCommand(`git commit -m "${isSuccess ? 'Done' : 'Failed'}: ${taskFile}${isRetry ? ' (retry)' : ''}"`, __dirname);
       if (committed) {
-      runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
-       }
+        runCommand(`git push ${getAuthUrl(AGENT_REPO)} main`, __dirname);
+      }
 
-     
     } else {
-      finalReport += `⚠️ *Push נכשל:* ${taskFile} (${slug})\n\n`;
+      finalReport += `⚠️ <b>Push נכשל:</b> ${taskFile} (${slug})\n\n`;
     }
 
     // Cleanup workspace
     fs.rmSync(repoDir, { recursive: true, force: true });
   }
-    finalReport += '\n';
-if (finalReport.length > 4000) {
-  finalReport = finalReport.substring(0, 3900) + '\n\n...✂️ נחתך';
-}
-await sendTelegram(finalReport);
+  finalReport += '\n';
+  if (finalReport.length > 4000) {
+    finalReport = finalReport.substring(0, 3900) + '\n\n...✂️ נחתך';
+  }
+  lastReport = finalReport;
+  await sendTelegram(finalReport);
   console.log('🏁 Batch finished.');
+  } finally {
+    isRunning = false;
+  }
 }
 
 // ================================================
